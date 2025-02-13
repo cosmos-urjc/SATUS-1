@@ -1,2 +1,2 @@
 # Cosmos-Rocket-Team
-Code for the On-Board flight computer
+SATUS-1 On-Board flight computer
