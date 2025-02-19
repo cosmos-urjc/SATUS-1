@@ -9,6 +9,9 @@
 // REPLACE WITH YOUR RECEIVER MAC Address
 uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
 
+// define the relay pin
+#define RELAY_PIN 23
+
 // Structure example to send data
 // Must match the receiver structure
 typedef struct struct_message {
@@ -30,12 +33,25 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
 // Callback when data is received
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  // Copy the received data into our incomingNumber struct
   memcpy(&incomingNumber, incomingData, sizeof(incomingNumber));
-  Serial.print("Number received: ");
+
+  // Print the received number
+  Serial.print("\r\nNumber received: ");
   Serial.println(incomingNumber.a);
+
+  // Change the relay status. For example, setting LOW may turn the relay on.
+  digitalWrite(RELAY_PIN, LOW);
+  Serial.print("RELAY IS ON"); 
+  delay(600);
+  digitalWrite(RELAY_PIN, HIGH);
 }
 
 void setup() {
+  // Initialize the relay pin as an OUTPUT
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW); // Set relay OFF initially
+
   // Init Serial Monitor
   Serial.begin(115200);
  
@@ -79,5 +95,5 @@ void loop() {
   else {
     Serial.println("Error sending the data");
   }
-  delay(2000);
+  delay(20000);
 }

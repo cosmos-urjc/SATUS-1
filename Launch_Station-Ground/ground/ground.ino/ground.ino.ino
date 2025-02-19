@@ -9,6 +9,13 @@
 // REPLACE WITH YOUR RECEIVER MAC Address
 uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
+// define ground_status_led
+#define ground_led 19
+// define arm_key_led
+//#define arm_led 18
+// define launcher_status_led
+//#define launcher_led 17
+
 // Structure example to send data
 // Must match the receiver structure
 typedef struct struct_message {
@@ -18,6 +25,9 @@ typedef struct struct_message {
 // Global variables for outgoing and incoming data
 struct_message myData;
 struct_message incomingNumber;
+
+// Variable global
+bool ground_status;
 
 // variable peerInfo para guardar informaciono del receptor(peer)
 esp_now_peer_info_t peerInfo;
@@ -36,6 +46,10 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 }
 
 void setup() {
+  // Setup de leds
+  pinMode(ground_led, OUTPUT);
+  pinWrite(ground_led, LOW); // Estado del led de normal es apagado
+
   // Init Serial Monitor
   Serial.begin(115200);
  
@@ -79,5 +93,8 @@ void loop() {
   else {
     Serial.println("Error sending the data");
   }
-  delay(8000);
+  delay(4000);
+
+  if ground_status == True
+
 }
