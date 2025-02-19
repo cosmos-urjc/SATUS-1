@@ -1,13 +1,13 @@
 /*
   Testeo de recepcion y transmision de datos wifi con el protocolo esp_now de largo alcanze para ESP32
-  Receptor
+  Transmisor
 */
 
 #include <esp_now.h>
 #include <WiFi.h>
 
 // REPLACE WITH YOUR RECEIVER MAC Address
-uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
+uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Structure example to send data
 // Must match the receiver structure
@@ -68,7 +68,7 @@ void setup() {
  
 void loop() {
   // Set the value to send
-  myData.a = 2;
+  myData.a = 1;
   
   // Send message via ESP-NOW
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
@@ -79,5 +79,5 @@ void loop() {
   else {
     Serial.println("Error sending the data");
   }
-  delay(2000);
+  delay(8000);
 }
