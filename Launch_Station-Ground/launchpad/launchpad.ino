@@ -1,38 +1,55 @@
+/*************************************************************
+ *  LAUNCHPAD STATION (Estación de Lanzamiento) - ESP32
+ *  
+ *  Este programa corre en el ESP32 que actúa como estación de 
+ *  lanzamiento. Se encarga de:
+ *    - Mantener conexión ESP-NOW con la estación de tierra 
+ *      (otro ESP32) mediante “pings” periódicos.
+ *    - Manejar una pequeña máquina de estados para indicar 
+ *      si está conectado o desconectado.
+ *    - Encender un LED para mostrar el estado de conexión.
+ *    - (Aun no) Controlar un relé u otros periféricos 
+ *      relacionados con el lanzamiento.
+ *
+ *  Autor: Javier Ruiz
+ *************************************************************/
+
 // ------------------------------
-// Importo módulos y definiciones
+// Inclusión de librerías
 // ------------------------------
 #include <esp_now.h>
 #include <WiFi.h>
 
 
-// Definición de pines
-#define ON_LED 22             // LED indicador de energía
-#define STATUS_LED 21         // LED de estado (por ejemplo, para armado)
-#define RELAY_PIN 23          // Pin de control para el relay
+// ------------------------------
+// Definiciones de pines y periféricos
+// ------------------------------
+#define LED_POWER       22   // LED indicador de energía (rojo)
+#define LED_CONEXION    21   // LED indica conexión establecida (amarillo)
+#define PIN_RELE        23   // Pin de control del relé (activo en LOW)
 
 
-// ESP_NOW
+// ------------------------------
+// Configuración de ESP-NOW
+// ------------------------------
 // Dirección MAC del receptor (reemplaza con la MAC de tu receptor)
-//uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
 uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
-typedef struct struct_message {
-    int arm;
-} struct_message;
+typedef struct {
+  int pingValue;
+} EspNowMessage;
 
+// Datos globales para envío/recepción
+EspNowMessage sendData;       
+EspNowMessage receivedData;   
 
-// Variables globales para envío y recepción
-struct_message sendMessage;
-struct_message receivedMessage;
 // Estructura para la información del peer (dispositivo receptor)
 esp_now_peer_info_t peerInfo;
 
-// -------------------------------------------------------------------------
-// Variables globales para la sincronización de la entrega del mensaje
-// -------------------------------------------------------------------------
+// Variables para resultado de envío
 volatile bool sendStatusReceived = false;
-volatile bool lastSendSuccess   = false;
+volatile bool lastSendSuccess    = false;
 
 
 // -------------------------------------------------------------------------
@@ -43,34 +60,23 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   lastSendSuccess = (status == ESP_NOW_SEND_SUCCESS);
   // Indica que se ha recibido la respuesta del envío
   sendStatusReceived = true;
-  
-  // Muestra en el monitor serial el estado de la entrega
-  //Serial.print("\r\nEstado del último envío:\t");
-  //Serial.println(lastSendSuccess ? "Entrega Exitosa" : "Entrega Fallida");
 }
-
-
 
 // -------------------------------------------------------------------------
 // Callback: Se ejecuta al recibir datos vía ESP-NOW
 // -------------------------------------------------------------------------
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // Copia los datos recibidos en la estructura "receivedMessage"
-  memcpy(&receivedMessage, incomingData, sizeof(receivedMessage));
-  
-  // Muestra en el monitor serial el valor recibido
-  //Serial.print("\r\nPing recibido: ");
-  //Serial.println(receivedMessage.arm);
+  memcpy(&receivedData, incomingData, sizeof(receivedData));
 }
 
 
-// FUNCIONES DE SETUP
 // -------------------------------------------------------------------------
 // Función: setupESPNOW()
 // Configura la comunicación ESP-NOW en modo estación (WIFI_STA) y registra
 // los callbacks de envío y recepción.
 // -------------------------------------------------------------------------
-void setupESPNOW() {
+void setupEspNow() {
   // Establece el modo Wi-Fi en "Station"
   WiFi.mode(WIFI_STA);
   
@@ -98,46 +104,39 @@ void setupESPNOW() {
 }
 
 
-
 // -------------------------------------------------------------------------
 // Funciones de configuración de periféricos (LED, Relay, etc.)
 // Se pueden activar si se desea utilizar estos elementos
 // -------------------------------------------------------------------------
-void setupOnLed(){
-  pinMode(ON_LED, OUTPUT);
-  digitalWrite(ON_LED, HIGH); // Inicia apagado
+void setupLeds() {
+  pinMode(LED_POWER,  OUTPUT);  digitalWrite(LED_POWER,  HIGH); // invertido: HIGH = off
+  pinMode(LED_CONEXION, OUTPUT);  digitalWrite(LED_CONEXION, LOW);  // Led de estado apagado inicial
 }
 
-void setupStatusLed(){
-  pinMode(STATUS_LED, OUTPUT);
-  // dejar como off al inicio
-  digitalWrite(STATUS_LED, LOW); // dejar como off al inicio
-}
-
-void setupRelay(){
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // dejar apagado al inicio
+void setupRele() {
+  pinMode(PIN_RELE, OUTPUT);
+  // Relé inactivo => HIGH
+  digitalWrite(PIN_RELE, HIGH);
 }
 
 
-
-
-// FUNCIONES DE LOOP
 // ---------------------
-// Función sendArm()
-// Envía un "ping" vía ESP-NOW y retorna 1 si se entregó correctamente
+// Función: sendPing()
+// Envía un ping (pingValue=0) y retorna 1 si éxito, 0 si fallo.
 // ---------------------
-int sendArm() {
-  // Asigna el valor del arm a enviar
-  sendMessage.arm = 0;
+int sendPing() {
+  // Asigna el valor del ping a enviar
+  sendData.pingValue = 0;
   
   // Reinicia la bandera para indicar que aún no se ha recibido el callback
   sendStatusReceived = false;
+  lastSendSuccess    = false;
   
   // Envía el mensaje vía ESP-NOW
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&sendMessage, sizeof(sendMessage));
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&sendData, sizeof(sendData));
   if (result != ESP_OK) {
-    return 0;  // Error al enviar (el mensaje no pudo encolarse)
+    // Error al enviar (el mensaje no pudo encolarse)
+    return 0;  
   }
   
   // Espera hasta 1 segundo para que se reciba el callback de envío
@@ -147,48 +146,45 @@ int sendArm() {
   }
   
   // Si no se recibió el callback en 1 segundo, se considera fallo
-  if (!sendStatusReceived) {
-    return 0;
-  }
-  
   // Retorna 1 únicamente si el envío fue exitoso (según el callback), de lo contrario 0.
-  return lastSendSuccess ? 1 : 0;
+  return (sendStatusReceived && lastSendSuccess) ? 1 : 0;
 }
-
-
-
-
 
 
 // -------------------------------------------------------------------------
 // Máquina de Estados
 // -------------------------------------------------------------------------
 enum Estado {
-  STATE_INICIAL,   // Sin conexión: LED parpadea
-  STATE_CONEXION   // Con conexión: LED encendido estático
+  STATE_INICIAL,   // Sin conexión
+  STATE_CONEXION   // Con conexión
 };
 
 Estado estadoActual = STATE_INICIAL;
 
-// Funciones para la transición de estados
+/* -- Funciones para entrar/salir de cada estado -- */
+
 void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
   Serial.println("Entrando en estado: SIN CONEXIÓN");
-  digitalWrite(STATUS_LED, LOW); // LED apagado
+  // LED de estado apagado
+  digitalWrite(LED_CONEXION, LOW);
 }
 
 void salirEstadoInicial() {
-  Serial.println("Saliendo del estado: SIN CONEXIÓN");
+  Serial.println("Saliendo de STATE_INICIAL.");
 }
 
 void entrarEstadoConexion() {
   estadoActual = STATE_CONEXION;
-  Serial.println("Entrando en estado: CON CONEXIÓN");
-  digitalWrite(STATUS_LED, HIGH); // LED encendido
+  Serial.println("Entrando en STATE_CONEXION (CONECTADO).");
+  // LED de estado encendido
+  digitalWrite(LED_CONEXION, HIGH);
 }
 
 void salirEstadoConexion() {
-  Serial.println("Saliendo del estado: CON CONEXIÓN");
+  Serial.println("Saliendo de STATE_CONEXION.");
+  // LED de estado apagado
+  digitalWrite(LED_CONEXION, LOW);
 }
 
 
@@ -200,15 +196,6 @@ unsigned long previousSendMillis  = 0;
 const long sendInterval           = 1000;  
 
 
-
-
-
-
-
-
-
-
-
 // -------------------------------------------------------------------------
 // Función: setup()
 // Configura el monitor serial, los periféricos y la comunicación ESP-NOW.
@@ -218,14 +205,13 @@ void setup() {
   Serial.println("¡Hola, ESP32!");
 
   // Inicialización de periféricos (descomentar si se utilizan)
-  setupOnLed();
-  setupStatusLed();
-  //setupRelay();
+  setupLeds();
+  setupRele();
+  setupEspNow(); 
 
   // Configura la comunicación ESP-NOW
-  setupESPNOW();
+  entrarEstadoInicial();
 }
-
 
 
 // -------------------------------------------------------------------------
@@ -233,27 +219,31 @@ void setup() {
 // Envía el "ping" periódicamente y muestra el resultado en el monitor serial.
 // -------------------------------------------------------------------------
 void loop() {
+  // pillo el tiempo actual
   unsigned long currentMillis = millis();
   
-  // Envío periódico de ping
+  // 1) Enviar ping cada “sendInterval” para verificar conexión
   if (currentMillis - previousSendMillis >= sendInterval) {
-    previousSendMillis = currentMillis;
+    previousSendMillis = currentMillis;;
     
-    // Envio un ping
-    int armResult = sendArm();
+    int resultPing = sendPing(); // 1 = éxito, 0 = fallo
 
-    if (armResult == 1) {
-      //Serial.println("Ping entregado exitosamente");
+    if (resultPing == 1) {
+      // Si hay éxito en el envío, hay conexión
       if (estadoActual == STATE_INICIAL) {
+        // Pasamos de sin conexión a conexión
         salirEstadoInicial();
         entrarEstadoConexion();
       }
-    } else {
-      //Serial.println("Fallo en la entrega del ping");
+    }
+    else {
+      // Fallo en el ping => sin conexión
       if (estadoActual == STATE_CONEXION) {
+        // Regresamos a inicial
         salirEstadoConexion();
         entrarEstadoInicial();
       }
     }
   }
+
 }
