@@ -35,7 +35,6 @@
 #define LED_LANZADO     16   // LED indica lanzamiento (azul)
 
 // Relé y controles
-#define PIN_RELE        23   // Pin de control del relé (activo en LOW)
 #define PIN_LLAVE       17   // Pin de llave de seguridad (INPUT_PULLUP)
 #define PIN_BOTON       18   // Pin de botón de disparo (INPUT_PULLUP)
 
@@ -49,7 +48,7 @@ uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
 typedef struct {
-  int pingValue;
+  int command;    // 0 = desarmado, 1 = ARMED, 2 = lanzar
 } EspNowMessage;
 
 // Variables globales para envío y recepción
@@ -113,6 +112,9 @@ void setupEspNow() {
 
   // Registra el callback para la recepción de datos
   esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
+
+  // dejo el valor por default de desactivado
+  sendData.command = 0;
 }
 
 
@@ -137,12 +139,6 @@ void setupLeds() {
   digitalWrite(LED_LANZADO, LOW);
 }
 
-void setupRele() {
-  pinMode(PIN_RELE, OUTPUT);
-  // Relé inactivo => HIGH
-  digitalWrite(PIN_RELE, HIGH);
-}
-
 void setupControles() {
   // Llave y Botón como entradas con pull-up => “cerrado” = LOW, “abierto” = HIGH
   pinMode(PIN_LLAVE, INPUT_PULLUP);
@@ -151,12 +147,9 @@ void setupControles() {
 
 // ---------------------
 // Función: sendArm()
-// Envía un ping (pingValue=0) y retorna 1 si éxito, 0 si fallo.
+// Envía un ping (command=0) y retorna 1 si éxito, 0 si fallo.
 // ---------------------
-int sendArm() {
-  // Asigna el valor del arm a enviar
-  sendData.pingValue = 0;
-  
+int sendArm() {  
   // Reinicia la bandera para indicar que aún no se ha recibido el callback
   sendStatusReceived = false;
   lastSendSuccess    = false;
@@ -199,7 +192,6 @@ void entrarEstadoInicial() {
   digitalWrite(LED_CONEXION, LOW);
   digitalWrite(LED_ARMED,    LOW);
   digitalWrite(LED_LANZADO,  LOW);
-  digitalWrite(PIN_RELE,     HIGH); // relé inactivo
 }
 
 void salirEstadoInicial() {
@@ -218,39 +210,48 @@ void salirEstadoConexion() {
   digitalWrite(LED_CONEXION, LOW);
 }
 
+// Cuando entramos en STATE_ARMED, enviamos command=1 al Launchpad
 void entrarEstadoArmed() {
   estadoActual = STATE_ARMED;
   Serial.println("Entrando en STATE_ARMED (listo).");
   // Enciende LED verde
   digitalWrite(LED_ARMED, HIGH);
+  // Avisar al Launchpad que se “arme”
+  sendData.command = 1;
+  esp_now_send(broadcastAddress, (uint8_t*)&sendData, sizeof(sendData));
 }
 
+// Ejemplo: mandar "desamar" (command=0) al launchpad
 void salirEstadoArmed() {
   Serial.println("Saliendo de STATE_ARMED.");
   digitalWrite(LED_ARMED, LOW);
+  // Avisar al Launchpad que se desarme (command=0)
+  sendData.command = 0;
+  esp_now_send(broadcastAddress, (uint8_t*)&sendData, sizeof(sendData));
 }
 
+// Cuando entramos en STATE_LANZADO, enviamos command=2 al Launchpad
 void entrarEstadoLanzado() {
   estadoActual = STATE_LANZADO;
   Serial.println("Entrando en STATE_LANZADO.");
-  // Activa el relé (LOW) y LED azul
-  digitalWrite(PIN_RELE,    LOW);
+  // Activa el LED azul
   digitalWrite(LED_LANZADO, HIGH);
+  // Avisar al Launchpad que “lance” (command=2)
+  sendData.command = 2;
+  esp_now_send(broadcastAddress, (uint8_t*)&sendData, sizeof(sendData));
 }
 
 void salirEstadoLanzado() {
   Serial.println("Saliendo de STATE_LANZADO.");
   digitalWrite(LED_LANZADO, LOW);
-  // (Opcional) apagar relé aquí si quieres que se desactive de inmediato
-  // o dejarlo activo hasta volver a STATE_INICIAL en la lógica
 }
 
 
 // -------------------------------------------------------------------------
 // Variables para control de pings
 // -------------------------------------------------------------------------
-unsigned long previousSendMillis = 0;
-const long sendInterval = 1000; // Enviar ping cada 1 seg
+unsigned long previousSendMillis =    0;
+const long sendInterval =          1000; // Enviar ping cada 1 seg
 
 
 // -------------------------------------------------------------------------
@@ -263,7 +264,6 @@ void setup() {
 
    // Configuración de pines
   setupLeds();
-  setupRele();
   setupControles();
 
   // Configuración de ESP-NOW
@@ -286,7 +286,7 @@ void loop() {
   if (currentMillis - previousSendMillis >= sendInterval) {
     previousSendMillis = currentMillis;
 
-    // Resultado de ping: 1 = éxito, 0 = fallo
+    // Resultado de command: 1 = éxito, 0 = fallo
     int armResult = sendArm();  
 
     if (armResult == 1) {

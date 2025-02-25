@@ -1,15 +1,17 @@
 /*************************************************************
- *  LAUNCHPAD STATION (Estación de Lanzamiento) - ESP32
+ * LAUNCHPAD STATION (Estación de Lanzamiento) - ESP32
  *  
- *  Este programa corre en el ESP32 que actúa como estación de 
- *  lanzamiento. Se encarga de:
- *    - Mantener conexión ESP-NOW con la estación de tierra 
- *      (otro ESP32) mediante “pings” periódicos.
- *    - Manejar una pequeña máquina de estados para indicar 
- *      si está conectado o desconectado.
- *    - Encender un LED para mostrar el estado de conexión.
- *    - (Aun no) Controlar un relé u otros periféricos 
- *      relacionados con el lanzamiento.
+ * Este programa corre en el ESP32 que actúa como estación 
+ * de lanzamiento. Se encarga de:
+ *   - Mantener conexión ESP-NOW con la estación de tierra (ground).
+ *   - Manejar 3 estados:
+ *       STATE_INICIAL  ->  sin conexión
+ *       STATE_CONEXION ->  conexión establecida
+ *       STATE_ARMED    ->  armado (definido por el ground)
+ *   - Encender un LED de estado para indicar si está conectado.
+ *   - (Opcional) Manejar un relé o LED adicional al armar.
+ *   - Salir de ARMED si se pierde la conexión o si el ground manda 
+ *     comando=0 (desarmar).
  *
  *  Autor: Javier Ruiz
  *************************************************************/
@@ -37,7 +39,7 @@ uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
 typedef struct {
-  int pingValue;
+  int command;    // 0 = desarmado, 1 = ARMED, 2 = lanzar
 } EspNowMessage;
 
 // Datos globales para envío/recepción
@@ -51,6 +53,9 @@ esp_now_peer_info_t peerInfo;
 volatile bool sendStatusReceived = false;
 volatile bool lastSendSuccess    = false;
 
+// Variable global para almacenar el último comando recibido
+volatile int lastCommand = 0; // 0 o 1
+volatile int armado = 0;  // 0 o 1
 
 // -------------------------------------------------------------------------
 // Callback: Se ejecuta cuando se envían los datos vía ESP-NOW
@@ -68,6 +73,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // Copia los datos recibidos en la estructura "receivedMessage"
   memcpy(&receivedData, incomingData, sizeof(receivedData));
+  // Guardar en lastCommand lo que mande el ground
+  lastCommand = receivedData.command;
 }
 
 
@@ -121,11 +128,11 @@ void setupRele() {
 
 // ---------------------
 // Función: sendPing()
-// Envía un ping (pingValue=0) y retorna 1 si éxito, 0 si fallo.
+// Envía un ping (command=0) y retorna 1 si éxito, 0 si fallo.
 // ---------------------
 int sendPing() {
   // Asigna el valor del ping a enviar
-  sendData.pingValue = 0;
+  sendData.command = 0; // es 0 el launch no comunica si esta en estado de armed o no
   
   // Reinicia la bandera para indicar que aún no se ha recibido el callback
   sendStatusReceived = false;
@@ -155,11 +162,12 @@ int sendPing() {
 // -------------------------------------------------------------------------
 enum Estado {
   STATE_INICIAL,   // Sin conexión
-  STATE_CONEXION   // Con conexión
+  STATE_CONEXION,  // Con conexión
+  STATE_ARMED,     // Armado
+  STATE_LAUNCHED   // Lanzamiento
 };
 
 Estado estadoActual = STATE_INICIAL;
-
 
 // ---------------------
 // Funciones de transición
@@ -180,14 +188,57 @@ void entrarEstadoConexion() {
   Serial.println("Entrando en STATE_CONEXION (CONECTADO).");
   // LED de estado encendido
   digitalWrite(LED_CONEXION, HIGH);
+  // Al entrar a CONEXION, reseteamos cualquier “armado”
+  armado = 0; 
+  lastCommand = 0; 
 }
 
 void salirEstadoConexion() {
   Serial.println("Saliendo de STATE_CONEXION.");
+  // borrar variables
+  armado = 0; 
+  lastCommand = 0; 
   // LED de estado apagado
   digitalWrite(LED_CONEXION, LOW);
 }
 
+void entrarEstadoArmed() {
+  estadoActual = STATE_ARMED;
+  Serial.println("Launchpad: STATE_ARMED.");
+  // Activo el armado por software
+  armado = 1;
+  // No encendemos relé todavía, se haría en LAUNCHED
+}
+
+void salirEstadoArmed() {
+  Serial.println("Launchpad: Saliendo de STATE_ARMED.");
+  lastCommand = 0;  // borrar el armado
+  // Activo el armado por software
+  armado = 0;
+}
+
+// Nuevo estado LAUNCHED
+void entrarEstadoLaunched() {
+  estadoActual = STATE_LAUNCHED;
+  Serial.println("Launchpad: STATE_LAUNCHED (lanzamiento).");
+  // Aquí sí encendemos relé, si “armado==1”
+  if (armado == 1) {
+    digitalWrite(PIN_RELE, LOW);  // relé activo
+    Serial.println("Relé ACTIVADO - Lanzamiento");
+  } else {
+    // Si por alguna razón “armado==0”, no lanzamos
+    digitalWrite(PIN_RELE, HIGH);
+    Serial.println("No se puede lanzar: armado=0");
+  }
+}
+
+void salirEstadoLaunched() {
+  Serial.println("Launchpad: Saliendo de STATE_LAUNCHED.");
+  digitalWrite(PIN_RELE, HIGH);  // relé inactivo
+  // Podemos o no poner armado=0 aquí, depende si quieres 
+  // “desarmar” cuando sales de LAUNCHED
+  armado = 0;
+}
 
 // -------------------------------------------------------------------------
 // Variables para control de temporización (no bloqueante)
@@ -239,12 +290,64 @@ void loop() {
     }
     else {
       // Fallo en el ping => sin conexión
-      if (estadoActual == STATE_CONEXION) {
-        // Regresamos a inicial
-        salirEstadoConexion();
-        entrarEstadoInicial();
+      // Volver a STATE_INICIAL si estábamos en CONEXION o ARMADO
+      switch(estadoActual) {
+        case STATE_CONEXION:
+          salirEstadoConexion();
+          entrarEstadoInicial();
+          break;
+        case STATE_ARMED:
+          salirEstadoArmed();
+          salirEstadoConexion();
+          entrarEstadoInicial();
+          break;
+        case STATE_LAUNCHED:
+          salirEstadoLaunched();
+          salirEstadoArmed(); 
+          salirEstadoConexion();
+          entrarEstadoInicial();
+          break;
+        default:
+          // me quedo en el estado inicial
+          break;
       }
     }
   }
 
+  // 2) Procesar el ultimo comando recibido del ground
+  // (0 = "desarmar", 1 = "armar", 2 = "lanzar")
+  if (lastCommand == 1) {
+    // “armar”
+    if (estadoActual == STATE_CONEXION) {
+      entrarEstadoArmed();
+    }
+    //lastCommand = 0; // consumir el comando
+  }
+
+  else if (lastCommand == 0){
+    // “desarmar”
+    // Si estás en ARMED => vuelve a CONEXION
+    if (estadoActual == STATE_ARMED) {
+      salirEstadoArmed();
+      // vuelvo al modo conexion
+      entrarEstadoConexion();
+    }
+    // Si estás en LAUNCHED => Apagar relé y volver a CONEXION
+    if (estadoActual == STATE_LAUNCHED) {
+      salirEstadoLaunched();
+      salirEstadoArmed();
+      entrarEstadoConexion();
+    }
+  }
+
+  else if (lastCommand == 2) {
+    // “lanzar”
+    // Solo tiene sentido si estás en ARMED
+    if (estadoActual == STATE_ARMED) {
+      entrarEstadoLaunched();
+    }
+  }
+  // 3) (Opcional) cualquier otra lógica local
+
+  delay(100);
 }
