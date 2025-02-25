@@ -1,4 +1,6 @@
-// importo modulos
+// ------------------------------
+// Importo módulos y definiciones
+// ------------------------------
 #include <esp_now.h>
 #include <WiFi.h>
 
@@ -12,8 +14,8 @@
 
 // ESP_NOW
 // Dirección MAC del receptor (reemplaza con la MAC de tu receptor)
-//uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
+//uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
 typedef struct struct_message {
@@ -22,27 +24,17 @@ typedef struct struct_message {
 
 
 
-// Variables Globales
-// Variables globales para el envío y recepción
+// Variables globales para envío y recepción
 struct_message pingMessage;
 struct_message receivedPing;
-
 // Estructura para la información del peer (dispositivo receptor)
 esp_now_peer_info_t peerInfo;
 
 // -------------------------------------------------------------------------
 // Variables globales para la sincronización de la entrega del mensaje
 // -------------------------------------------------------------------------
-//
-// sendStatusReceived: Bandera que indica si ya se ha recibido el callback de
-//                     envío (OnDataSent). Se pone en false antes de enviar y
-//                     en true cuando el callback es invocado.
-//
-// lastSendSuccess:    Indica si el envío fue exitoso (true) o fallido (false),
-//                     según el valor recibido en el callback.
-//
 volatile bool sendStatusReceived = false;
-volatile bool lastSendSuccess = false;
+volatile bool lastSendSuccess   = false;
 
 
 // -------------------------------------------------------------------------
@@ -55,8 +47,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   sendStatusReceived = true;
   
   // Muestra en el monitor serial el estado de la entrega
-  Serial.print("\r\nEstado del último envío:\t");
-  Serial.println(lastSendSuccess ? "Entrega Exitosa" : "Entrega Fallida");
+  //Serial.print("\r\nEstado del último envío:\t");
+  //Serial.println(lastSendSuccess ? "Entrega Exitosa" : "Entrega Fallida");
 }
 
 
@@ -69,13 +61,8 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   memcpy(&receivedPing, incomingData, sizeof(receivedPing));
   
   // Muestra en el monitor serial el valor recibido
-  Serial.print("\r\nPing recibido: ");
-  Serial.println(receivedPing.ping);
-
-  // Enciende el LED de energía (STATUS_LED) durante 1 segundo y luego lo apaga
-  digitalWrite(STATUS_LED, HIGH);
-  delay(600);
-  digitalWrite(STATUS_LED, LOW);
+  //Serial.print("\r\nPing recibido: ");
+  //Serial.println(receivedPing.ping);
 }
 
 
@@ -176,6 +163,54 @@ int sendPing() {
 
 
 
+// -------------------------------------------------------------------------
+// Máquina de Estados
+// -------------------------------------------------------------------------
+enum Estado {
+  STATE_INICIAL,   // Sin conexión: LED parpadea
+  STATE_CONEXION   // Con conexión: LED encendido estático
+};
+
+Estado estadoActual = STATE_INICIAL;
+
+// Funciones para la transición de estados
+void entrarEstadoInicial() {
+  estadoActual = STATE_INICIAL;
+  Serial.println("Entrando en estado: SIN CONEXIÓN");
+  digitalWrite(STATUS_LED, LOW); // LED apagado
+}
+
+void salirEstadoInicial() {
+  Serial.println("Saliendo del estado: SIN CONEXIÓN");
+}
+
+void entrarEstadoConexion() {
+  estadoActual = STATE_CONEXION;
+  Serial.println("Entrando en estado: CON CONEXIÓN");
+  digitalWrite(STATUS_LED, HIGH); // LED encendido
+}
+
+void salirEstadoConexion() {
+  Serial.println("Saliendo del estado: CON CONEXIÓN");
+}
+
+
+// -------------------------------------------------------------------------
+// Variables para control de temporización (no bloqueante)
+// -------------------------------------------------------------------------
+// Intervalo de envío de ping
+unsigned long previousPingMillis  = 0;
+const long pingInterval           = 1000; 
+
+
+
+
+
+
+
+
+
+
 
 // -------------------------------------------------------------------------
 // Función: setup()
@@ -201,13 +236,28 @@ void setup() {
 // Envía el "ping" periódicamente y muestra el resultado en el monitor serial.
 // -------------------------------------------------------------------------
 void loop() {
-  int pingResult = sendPing();
-
-  if (pingResult == 1) {
-    Serial.println("Ping entregado exitosamente");
-  } else {
-    Serial.println("Fallo en la entrega del ping");
-  }
+  unsigned long currentMillis = millis();
   
-  delay(2000); // Espera 5 segundos antes de enviar el siguiente ping
+  // Envío periódico de ping
+  if (currentMillis - previousPingMillis >= pingInterval) {
+    // reinicio el contador
+    previousPingMillis = currentMillis;
+    
+    // Envio un ping
+    int pingResult = sendPing();
+
+    if (pingResult == 1) {
+      //Serial.println("Ping entregado exitosamente");
+      if (estadoActual == STATE_INICIAL) {
+        salirEstadoInicial();
+        entrarEstadoConexion();
+      }
+    } else {
+      //Serial.println("Fallo en la entrega del ping");
+      if (estadoActual == STATE_CONEXION) {
+        salirEstadoConexion();
+        entrarEstadoInicial();
+      }
+    }
+  }
 }
