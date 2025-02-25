@@ -11,7 +11,6 @@
 #define RELAY_PIN 23          // Pin de control para el relay
 
 
-
 // ESP_NOW
 // Dirección MAC del receptor (reemplaza con la MAC de tu receptor)
 //uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
@@ -21,7 +20,6 @@ uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 typedef struct struct_message {
     int arm;
 } struct_message;
-
 
 
 // Variables globales para envío y recepción

@@ -14,8 +14,8 @@
 #define RELAY_PIN 23          // Pin de control para el relay
 #define LLAVE_PIN 17          // Pin de la llave
 #define BOTON_PIN 18          // Pin del botón
-#define ARMED_PIN 19          // LED de estado (STATE_ARMED) - verde
-#define FIRE_PIN 16           // LED de estado (STATE_LANZADO) - azul
+#define ARMED_LED 19          // LED de estado (STATE_ARMED) - verde
+#define FIRE_LED 16           // LED de estado (STATE_LANZADO) - azul
 
 // ---------------------
 // Variables ESP-NOW
@@ -125,8 +125,8 @@ void setupRelay(){
 }
 
 void setupArmedLed(){
-  pinMode(ARMED_PIN, OUTPUT);
-  digitalWrite(ARMED_PIN, LOW); // dejar apagado al inicio
+  pinMode(ARMED_LED, OUTPUT);
+  digitalWrite(ARMED_LED, LOW); // dejar apagado al inicio
 }
 
 void setupBoton(){
@@ -140,8 +140,8 @@ void setupLlaves(){
 }
 
 void setupFireLed(){
-  pinMode(FIRE_PIN, OUTPUT);
-  digitalWrite(FIRE_PIN, LOW); // dejar apagado al inicio
+  pinMode(FIRE_LED, OUTPUT);
+  digitalWrite(FIRE_LED, LOW); // dejar apagado al inicio
 }
 
 
@@ -190,7 +190,7 @@ int sendArm() {
 enum Estado {
   STATE_INICIAL,   // Estado por defecto; espera de conexión (ping)
   STATE_CONEXION,  // Conexión establecida; se enciende CONECT_LED
-  STATE_READY,     // Estado listo: se monitorea el switch y la llave
+  STATE_ARMED,     // Estado listo: se monitorea el switch y la llave
   STATE_LANZADO    // Acción final ejecutada (por ejemplo, relay activado)
 };
 
@@ -202,8 +202,8 @@ void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
   Serial.println("Entrando en STATE_INICIAL");
   digitalWrite(CONECT_LED, LOW);
-  digitalWrite(ARMED_PIN, LOW);
-  digitalWrite(FIRE_PIN, LOW);
+  digitalWrite(ARMED_LED, LOW);
+  digitalWrite(FIRE_LED, LOW);
   digitalWrite(RELAY_PIN, HIGH); // Relay apagado
 }
 
@@ -222,16 +222,16 @@ void salirEstadoConexion() {
   digitalWrite(CONECT_LED, LOW);
 }
 
-void entrarEstadoReady() {
-  estadoActual = STATE_READY;
-  Serial.println("Entrando en STATE_READY");
+void entrarEstadoArmed() {
+  estadoActual = STATE_ARMED;
+  Serial.println("Entrando en STATE_ARMED");
   // Aseguramos que en READY el switch y la llave se monitoreen sin activar acción
-  digitalWrite(ARMED_PIN, HIGH);
+  digitalWrite(ARMED_LED, HIGH);
 }
 
-void salirEstadoReady() {
-  Serial.println("Saliendo de STATE_READY");
-  digitalWrite(ARMED_PIN, LOW);
+void salirEstadoArmed() {
+  Serial.println("Saliendo de STATE_ARMED");
+  digitalWrite(ARMED_LED, LOW);
 }
 
 void entrarEstadoLanzado() {
@@ -239,12 +239,12 @@ void entrarEstadoLanzado() {
   Serial.println("Entrando en STATE_LANZADO");
   // Activa la acción final (por ejemplo, activa el relay)
   digitalWrite(RELAY_PIN, LOW);  // Activo (relay activo en LOW)
-  digitalWrite(FIRE_PIN, HIGH);
+  digitalWrite(FIRE_LED, HIGH);
 }
 
 void salirEstadoLanzado() {
   Serial.println("Saliendo de STATE_LANZADO");
-  digitalWrite(FIRE_PIN, LOW);
+  digitalWrite(FIRE_LED, LOW);
 }
 
 
@@ -281,64 +281,100 @@ void setup() {
 
 
 
-// -------------------------------------------------------------------------
-// Función: loop()
-// Envía el "ping" periódicamente y muestra el resultado en el monitor serial.
-// -------------------------------------------------------------------------
+/************************************************************************************
+ * loop()
+ ************************************************************************************/
 void loop() {
   unsigned long currentMillis = millis();
-  int estadoLlave = digitalRead(LLAVE_PIN);  // HIGH = off, LOW = on
-  int estadoSwitch = digitalRead(BOTON_PIN);   // HIGH = boton off, LOW = on
 
-  // --- Verificación de conexión vía ESP-NOW ---
+  // Lectura de llave/boton
+  int estadoLlave = digitalRead(LLAVE_PIN);     // HIGH = abierta (off), LOW = cerrada (on)
+  int estadoSwitch = digitalRead(BOTON_PIN);    // HIGH = abierta (off), LOW = cerrada (on)
+
+  // 1) Verificar conexión cada 'sendInterval'
   if (currentMillis - previousSendMillis >= sendInterval) {
     previousSendMillis = currentMillis;
-    int armResult = sendArm();
-    if (armResult == 1 && estadoActual == STATE_INICIAL) {
-      salirEstadoInicial();
-      entrarEstadoConexion();
-    } else if (armResult == 0 && estadoActual == STATE_CONEXION) {
-      salirEstadoConexion();
-      entrarEstadoInicial();
+
+    // Resultado de ping: 1 = éxito, 0 = fallo
+    int armResult = sendArm();  
+
+    if (armResult == 1) {
+      // Se recibió bien el "ping" --> Hay conexión
+      if (estadoActual == STATE_INICIAL) {
+        // Pasar de "sin conexión" a "con conexión"
+        Serial.println("TRANSICIÓN: STATE_INICIAL -> STATE_CONEXION");
+        salirEstadoInicial();
+        entrarEstadoConexion();
+      }
+      // Si está en STATE_CONEXION, simplemente me mantengo
+    }
+
+    else {
+      // Fallo en la entrega => No hay conexión
+      if (estadoActual == STATE_CONEXION) {
+        // De "conectado" volvemos a "inicial" (sin conexión)
+        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_INICIAL");
+        salirEstadoConexion();
+        entrarEstadoInicial();
+      }
+      else if (estadoActual == STATE_ARMED) {
+        // Si está ARMADO y perdemos conexión, desarmar
+        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_INICIAL");
+        salirEstadoArmed();
+        entrarEstadoInicial();
+      }
+      else if (estadoActual == STATE_LANZADO) {
+        // Si está LANZADO y perdemos conexión, desarmar
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_INICIAL");
+        salirEstadoLanzado();
+        entrarEstadoInicial();
+      }
+      // Opcionalmente poner aqui algo si se va la conexion y esta en STATE_LANZADO
     }
   }
 
-  // --- Máquina de Estados según condiciones del switch y la llave ---
+  // 2) Máquina de estados (condiciones de llave/botón)
   switch (estadoActual) {
     case STATE_INICIAL:
-      // Espera de conexión (ping)
+      // Esperamos a que se establezca la conexión (ping)
       break;
 
     case STATE_CONEXION:
-      // Para pasar a READY se requiere que el switch esté abierto (HIGH)
-      if (estadoSwitch == HIGH && estadoLlave == LOW) {
-        Serial.println("TRANSICIÓN: CONEXION -> READY (llave girada, pero boton no)");
-        entrarEstadoReady();
+      // Para armar: La llave debe estar cerrada (LOW) y el botón no pulsado (HIGH).
+      if (estadoLlave == LOW && estadoSwitch == HIGH) {
+        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_ARMED");
+        entrarEstadoArmed();
       }
       break;
 
-    case STATE_READY:
-      // En READY:
-      // - Si la llave se abre (HIGH), se cancela y se regresa a CONEXION.
-      // - Si la llave está cerrada (LOW) y el switch se cierra (LOW), se pasa a LANZADO.
+    case STATE_ARMED:
+      // - Si la llave se abre (HIGH), se "desarma" → vuelve a CONEXION
+      // - Si la llave sigue cerrada (LOW) y el botón se pulsa (LOW), lanzamos.
       if (estadoLlave == HIGH) {
-        Serial.println("TRANSICIÓN: READY -> CONEXION (llave abierta, cancelado)");
-        salirEstadoReady();
+        Serial.println("TRANSICIÓN: STATE_READY -> STATE_CONEXION");
+        salirEstadoArmed();
         entrarEstadoConexion();
       } 
       else if (estadoLlave == LOW && estadoSwitch == LOW) {
-        Serial.println("TRANSICIÓN: READY -> LANZADO (llave cerrada y switch cerrado)");
-        salirEstadoReady();
+        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_LANZADO");
+        //salirEstadoArmed();
         entrarEstadoLanzado();
       }
       break;
 
     case STATE_LANZADO:
-      // En LANZADO, si se abre el switch o la llave (cualquiera pasa a HIGH), se regresa a READY.
-      if (estadoLlave == HIGH || estadoSwitch == HIGH) {
-        Serial.println("TRANSICIÓN: LANZADO -> READY (se abrió switch o llave)");
+      // - Si la llave se abre (HIGH), se "desarma" → vuelve a CONEXION
+      // - Si la llave sigue cerrada (LOW) y el botón se despulsa (HIGH), se vuelve a armado.
+      if (estadoLlave == HIGH) {
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_CONEXION");
         salirEstadoLanzado();
-        entrarEstadoReady();
+        salirEstadoArmed();
+        entrarEstadoConexion();
+      } 
+      if (estadoSwitch == HIGH) {
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_ARMED");
+        salirEstadoLanzado();
+        entrarEstadoArmed();
       }
       break;
   }
