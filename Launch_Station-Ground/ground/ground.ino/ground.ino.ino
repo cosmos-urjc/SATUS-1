@@ -1,21 +1,44 @@
+/*************************************************************
+ *  GROUND STATION (Estación de Tierra) - ESP32
+ *  
+ *  Este programa corre en el ESP32 que actúa como estación de 
+ *  tierra para lanzar un cohete. Se encarga de:
+ *    - Mantener conexión ESP-NOW con la estación de lanzamiento 
+ *      (otro ESP32) mediante “pings” periódicos.
+ *    - Manejar una máquina de estados más completa:
+ *        STATE_INICIAL  ->  Sin conexión
+ *        STATE_CONEXION ->  Conexión establecida
+ *        STATE_ARMED    ->  Sistema armado (llave y botón supervisados)
+ *        STATE_LANZADO  ->  Lanzamiento (relé activo)
+ *    - Encender y apagar LEDs de indicación (amarillo, verde, azul).
+ *    - Controlar un relé para encender el motor del cohete.
+ *    - Desarmar automáticamente si se pierde la conexión.
+ *
+ *  Autor: Javier Ruiz
+ *************************************************************/
+
 // ------------------------------
-// Importo módulos y definiciones
+// Inclusión de librerías
 // ------------------------------
 #include <esp_now.h>
 #include <WiFi.h>
 
 
-
 // ---------------------
 // Definición de Pines
 // ---------------------
-#define ON_LED 22             // LED indicador de energía - rojo 
-#define CONECT_LED 21         // LED de estado (STATE_CONEXION) - amarillo
-#define RELAY_PIN 23          // Pin de control para el relay
-#define LLAVE_PIN 17          // Pin de la llave
-#define BOTON_PIN 18          // Pin del botón
-#define ARMED_LED 19          // LED de estado (STATE_ARMED) - verde
-#define FIRE_LED 16           // LED de estado (STATE_LANZADO) - azul
+
+// LED
+#define LED_POWER       22   // LED indicador de energía (rojo)
+#define LED_CONEXION    21   // LED indica conexión establecida (amarillo)
+#define LED_ARMED       19   // LED indica armado (verde)
+#define LED_LANZADO     16   // LED indica lanzamiento (azul)
+
+// Relé y controles
+#define PIN_RELE        23   // Pin de control del relé (activo en LOW)
+#define PIN_LLAVE       17   // Pin de llave de seguridad (INPUT_PULLUP)
+#define PIN_BOTON       18   // Pin de botón de disparo (INPUT_PULLUP)
+
 
 // ---------------------
 // Variables ESP-NOW
@@ -25,19 +48,20 @@ uint8_t broadcastAddress[] = {0xa0, 0xa3, 0xb3, 0x29, 0xde, 0x20};
 //uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
-typedef struct struct_message {
-    int arm;
-} struct_message;
+typedef struct {
+  int pingValue;
+} EspNowMessage;
 
 // Variables globales para envío y recepción
-struct_message sendMessage;
-struct_message receivedMessage;
+EspNowMessage sendData;
+EspNowMessage receivedData;
+
 // Estructura para la información del peer (dispositivo receptor)
 esp_now_peer_info_t peerInfo;
 
 // Variables globales para la sincronización de la entrega del mensaje
 volatile bool sendStatusReceived = false;
-volatile bool lastSendSuccess   = false;
+volatile bool lastSendSuccess    = false;
 
 
 // -------------------------------------------------------------------------
@@ -48,34 +72,23 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   lastSendSuccess = (status == ESP_NOW_SEND_SUCCESS);
   // Indica que se ha recibido la respuesta del envío
   sendStatusReceived = true;
-  
-  // Muestra en el monitor serial el estado de la entrega
-  //Serial.print("\r\nEstado del último envío:\t");
-  //Serial.println(lastSendSuccess ? "Entrega Exitosa" : "Entrega Fallida");
 }
-
-
 
 // -------------------------------------------------------------------------
 // Callback: Se ejecuta al recibir datos vía ESP-NOW
 // -------------------------------------------------------------------------
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // Copia los datos recibidos en la estructura "receivedMessage"
-  memcpy(&receivedMessage, incomingData, sizeof(receivedMessage));
-  
-  // Muestra en el monitor serial el valor recibido
-  //Serial.print("\r\nPing recibido: ");
-  //Serial.println(receivedMessage.arm);
+  memcpy(&receivedData, incomingData, sizeof(receivedData));
 }
 
 
-// FUNCIONES DE SETUP
 // -------------------------------------------------------------------------
-// Función: setupESPNOW()
+// Función: setupEspNow()
 // Configura la comunicación ESP-NOW en modo estación (WIFI_STA) y registra
 // los callbacks de envío y recepción.
 // -------------------------------------------------------------------------
-void setupESPNOW() {
+void setupEspNow() {
   // Establece el modo Wi-Fi en "Station"
   WiFi.mode(WIFI_STA);
   
@@ -103,95 +116,76 @@ void setupESPNOW() {
 }
 
 
-
 // -------------------------------------------------------------------------
-// Funciones de configuración de periféricos (LED, Relay, etc.)
-// Se pueden activar si se desea utilizar estos elementos
+// Configuración de pines (LEDs, relé, etc.)
 // -------------------------------------------------------------------------
-void setupOnLed(){
-  pinMode(ON_LED, OUTPUT);
-  digitalWrite(ON_LED, HIGH); // Inicia apagado
+void setupLeds() {
+  // LED indicador de energía
+  pinMode(LED_POWER, OUTPUT);
+  digitalWrite(LED_POWER, HIGH); // invertido: HIGH = off
+
+  // LED de conexión
+  pinMode(LED_CONEXION, OUTPUT);
+  digitalWrite(LED_CONEXION, LOW); // apagado al inicio
+
+  // LED de armado
+  pinMode(LED_ARMED, OUTPUT);
+  digitalWrite(LED_ARMED, LOW);
+
+  // LED de lanzamiento
+  pinMode(LED_LANZADO, OUTPUT);
+  digitalWrite(LED_LANZADO, LOW);
 }
 
-void setupConectLed(){
-  pinMode(CONECT_LED, OUTPUT);
-  // dejar como off al inicio
-  digitalWrite(CONECT_LED, LOW); // dejar como off al inicio
+void setupRele() {
+  pinMode(PIN_RELE, OUTPUT);
+  // Relé inactivo => HIGH
+  digitalWrite(PIN_RELE, HIGH);
 }
 
-void setupRelay(){
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // dejar apagado al inicio
+void setupControles() {
+  // Llave y Botón como entradas con pull-up => “cerrado” = LOW, “abierto” = HIGH
+  pinMode(PIN_LLAVE, INPUT_PULLUP);
+  pinMode(PIN_BOTON, INPUT_PULLUP);
 }
 
-void setupArmedLed(){
-  pinMode(ARMED_LED, OUTPUT);
-  digitalWrite(ARMED_LED, LOW); // dejar apagado al inicio
-}
-
-void setupBoton(){
-  // Configuro el boton como entrada con pull-up interno
-  pinMode(BOTON_PIN, INPUT_PULLUP);
-}
-
-void setupLlaves(){
-  // Configuro la llave como entrada con pull-up interno
-  pinMode(LLAVE_PIN, INPUT_PULLUP);
-}
-
-void setupFireLed(){
-  pinMode(FIRE_LED, OUTPUT);
-  digitalWrite(FIRE_LED, LOW); // dejar apagado al inicio
-}
-
-
-
-// FUNCIONES DE LOOP
 // ---------------------
-// Función sendArm()
-// Envía un "ping" vía ESP-NOW y retorna 1 si se entregó correctamente
+// Función: sendArm()
+// Envía un ping (pingValue=0) y retorna 1 si éxito, 0 si fallo.
 // ---------------------
 int sendArm() {
   // Asigna el valor del arm a enviar
-  sendMessage.arm = 0;
+  sendData.pingValue = 0;
   
   // Reinicia la bandera para indicar que aún no se ha recibido el callback
   sendStatusReceived = false;
+  lastSendSuccess    = false;
   
   // Envía el mensaje vía ESP-NOW
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&sendMessage, sizeof(sendMessage));
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&sendData, sizeof(sendData));
   if (result != ESP_OK) {
     return 0;  // Error al enviar (el mensaje no pudo encolarse)
   }
   
-  // Espera hasta 1 segundo para que se reciba el callback de envío
+  // Espera hasta 1 segundo a que se dispare el callback
   unsigned long startTime = millis();
   while (!sendStatusReceived && (millis() - startTime < 1000)) {
-    delay(10);  // Pequeña pausa para evitar bloqueo excesivo
+    delay(10);
   }
   
-  // Si no se recibió el callback en 1 segundo, se considera fallo
-  if (!sendStatusReceived) {
-    return 0;
-  }
-  
-  // Retorna 1 únicamente si el envío fue exitoso (según el callback), de lo contrario 0.
-  return lastSendSuccess ? 1 : 0;
+  // Retorna 1 si hubo éxito en la entrega, 0 si no
+  return (sendStatusReceived && lastSendSuccess) ? 1 : 0;
 }
-
-
-
-
 
 
 // -------------------------------------------------------------------------
 // Máquina de Estados
 // -------------------------------------------------------------------------
 enum Estado {
-  STATE_INICIAL,   // Estado por defecto; espera de conexión (ping)
-  STATE_CONEXION,  // Conexión establecida; se enciende CONECT_LED
-  STATE_ARMED,     // Estado listo: se monitorea el switch y la llave
-  STATE_LANZADO    // Acción final ejecutada (por ejemplo, relay activado)
+  STATE_INICIAL,   // Sin conexión
+  STATE_CONEXION,  // Conexión establecida
+  STATE_ARMED,     // Listo para lanzar (llave y botón supervisados)
+  STATE_LANZADO    // Proceso de lanzamiento (relé activo)
 };
 
 Estado estadoActual = STATE_INICIAL;
@@ -200,59 +194,63 @@ Estado estadoActual = STATE_INICIAL;
 
 void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
-  Serial.println("Entrando en STATE_INICIAL");
-  digitalWrite(CONECT_LED, LOW);
-  digitalWrite(ARMED_LED, LOW);
-  digitalWrite(FIRE_LED, LOW);
-  digitalWrite(RELAY_PIN, HIGH); // Relay apagado
+  Serial.println("Entrando en STATE_INICIAL (sin conexión).");
+  // Apagar LEDs de estados y relé
+  digitalWrite(LED_CONEXION, LOW);
+  digitalWrite(LED_ARMED,    LOW);
+  digitalWrite(LED_LANZADO,  LOW);
+  digitalWrite(PIN_RELE,     HIGH); // relé inactivo
 }
 
 void salirEstadoInicial() {
-  Serial.println("Saliendo de STATE_INICIAL");
+  Serial.println("Saliendo de STATE_INICIAL.");
 }
 
 void entrarEstadoConexion() {
   estadoActual = STATE_CONEXION;
-  Serial.println("Entrando en STATE_CONEXION");
-  digitalWrite(CONECT_LED, HIGH);  // Enciende LED de conexión
+  Serial.println("Entrando en STATE_CONEXION (conectado).");
+  // Enciende LED de conexión
+  digitalWrite(LED_CONEXION, HIGH);
 }
 
 void salirEstadoConexion() {
-  Serial.println("Saliendo de STATE_CONEXION");
-  digitalWrite(CONECT_LED, LOW);
+  Serial.println("Saliendo de STATE_CONEXION.");
+  digitalWrite(LED_CONEXION, LOW);
 }
 
 void entrarEstadoArmed() {
   estadoActual = STATE_ARMED;
-  Serial.println("Entrando en STATE_ARMED");
-  // Aseguramos que en READY el switch y la llave se monitoreen sin activar acción
-  digitalWrite(ARMED_LED, HIGH);
+  Serial.println("Entrando en STATE_ARMED (listo).");
+  // Enciende LED verde
+  digitalWrite(LED_ARMED, HIGH);
 }
 
 void salirEstadoArmed() {
-  Serial.println("Saliendo de STATE_ARMED");
-  digitalWrite(ARMED_LED, LOW);
+  Serial.println("Saliendo de STATE_ARMED.");
+  digitalWrite(LED_ARMED, LOW);
 }
 
 void entrarEstadoLanzado() {
   estadoActual = STATE_LANZADO;
-  Serial.println("Entrando en STATE_LANZADO");
-  // Activa la acción final (por ejemplo, activa el relay)
-  digitalWrite(RELAY_PIN, LOW);  // Activo (relay activo en LOW)
-  digitalWrite(FIRE_LED, HIGH);
+  Serial.println("Entrando en STATE_LANZADO.");
+  // Activa el relé (LOW) y LED azul
+  digitalWrite(PIN_RELE,    LOW);
+  digitalWrite(LED_LANZADO, HIGH);
 }
 
 void salirEstadoLanzado() {
-  Serial.println("Saliendo de STATE_LANZADO");
-  digitalWrite(FIRE_LED, LOW);
+  Serial.println("Saliendo de STATE_LANZADO.");
+  digitalWrite(LED_LANZADO, LOW);
+  // (Opcional) apagar relé aquí si quieres que se desactive de inmediato
+  // o dejarlo activo hasta volver a STATE_INICIAL en la lógica
 }
 
 
 // -------------------------------------------------------------------------
-// Variables para control de temporización
+// Variables para control de pings
 // -------------------------------------------------------------------------
 unsigned long previousSendMillis = 0;
-const long sendInterval = 1000;  // Intervalo de "ping" en milisegundos
+const long sendInterval = 1000; // Enviar ping cada 1 seg
 
 
 // -------------------------------------------------------------------------
@@ -263,35 +261,28 @@ void setup() {
   Serial.begin(115200);
   Serial.println("¡Hola, ESP32!");
 
-  // Inicialización de periféricos (descomentar si se utilizan)
-  setupOnLed();
-  setupConectLed();
-  //setupRelay();
-  setupArmedLed();
-  setupBoton();
-  setupLlaves();
-  setupFireLed();
+   // Configuración de pines
+  setupLeds();
+  setupRele();
+  setupControles();
 
-  // Configura la comunicación ESP-NOW
-  setupESPNOW();
+  // Configuración de ESP-NOW
+  setupEspNow();
 
-  // Arrancamos en estado inicial
+  // Entramos en estado inicial
   entrarEstadoInicial();
 }
 
 
 
-/************************************************************************************
- * loop()
- ************************************************************************************/
+// -------------------------------------------------------------------------
+// loop()
+// Envía pings periódicos para verificar conexión y maneja la máquina de estados
+// -------------------------------------------------------------------------
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Lectura de llave/boton
-  int estadoLlave = digitalRead(LLAVE_PIN);     // HIGH = abierta (off), LOW = cerrada (on)
-  int estadoSwitch = digitalRead(BOTON_PIN);    // HIGH = abierta (off), LOW = cerrada (on)
-
-  // 1) Verificar conexión cada 'sendInterval'
+  // 1) Enviar ping cada "sendInterval" para verificar conexión
   if (currentMillis - previousSendMillis >= sendInterval) {
     previousSendMillis = currentMillis;
 
@@ -302,82 +293,95 @@ void loop() {
       // Se recibió bien el "ping" --> Hay conexión
       if (estadoActual == STATE_INICIAL) {
         // Pasar de "sin conexión" a "con conexión"
-        Serial.println("TRANSICIÓN: STATE_INICIAL -> STATE_CONEXION");
+        Serial.println("TRANSICIÓN: STATE_INICIAL -> STATE_CONEXION (conexión detectada)");
         salirEstadoInicial();
         entrarEstadoConexion();
       }
-      // Si está en STATE_CONEXION, simplemente me mantengo
+      // Si ya estás en CONEXION, ARMED o LANZADO, no cambias nada por ahora
     }
 
     else {
-      // Fallo en la entrega => No hay conexión
-      if (estadoActual == STATE_CONEXION) {
-        // De "conectado" volvemos a "inicial" (sin conexión)
-        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_INICIAL");
-        salirEstadoConexion();
-        entrarEstadoInicial();
+      // Fallo en la entrega --> No hay conexión
+      switch (estadoActual) {
+        case STATE_CONEXION:
+          // De "conectado" volvemos a "inicial" (sin conexión)
+          Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_INICIAL (pérdida de conexión)");
+          salirEstadoConexion();
+          entrarEstadoInicial();
+          break;
+
+        case STATE_ARMED:
+          // Si está ARMADO y perdemos conexión, desarmar
+          Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_INICIAL (pérdida de conexión)");
+          salirEstadoArmed();
+          entrarEstadoInicial();
+          break;
+          
+        case STATE_LANZADO:
+          // Si está LANZADO y perdemos conexión, desarmar
+          Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_INICIAL (pérdida de conexión)");
+          salirEstadoLanzado();
+          entrarEstadoInicial();
+          break;
+
+        default:
+          // Si ya está en inicial, no hay transicion
+          break;
+
       }
-      else if (estadoActual == STATE_ARMED) {
-        // Si está ARMADO y perdemos conexión, desarmar
-        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_INICIAL");
-        salirEstadoArmed();
-        entrarEstadoInicial();
-      }
-      else if (estadoActual == STATE_LANZADO) {
-        // Si está LANZADO y perdemos conexión, desarmar
-        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_INICIAL");
-        salirEstadoLanzado();
-        entrarEstadoInicial();
-      }
-      // Opcionalmente poner aqui algo si se va la conexion y esta en STATE_LANZADO
     }
   }
 
-  // 2) Máquina de estados (condiciones de llave/botón)
+  // 2) Lógica de la máquina de estados con llave y botón
+  int estadoLlave = digitalRead(PIN_LLAVE);     // HIGH = abierta (off), LOW = cerrada (on)
+  int estadoSwitch = digitalRead(PIN_BOTON);    // HIGH = abierta (off), LOW = cerrada (on)
+  
   switch (estadoActual) {
+  
     case STATE_INICIAL:
       // Esperamos a que se establezca la conexión (ping)
       break;
 
     case STATE_CONEXION:
-      // Para armar: La llave debe estar cerrada (LOW) y el botón no pulsado (HIGH).
-      if (estadoLlave == LOW && estadoSwitch == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_ARMED");
+      // Para armar: llave cerrada (LOW), botón suelto (HIGH)
+      if ((estadoLlave == LOW) && (estadoSwitch == HIGH)) {
+        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_ARMED (llave cerrada, botón suelto)");
         entrarEstadoArmed();
       }
       break;
 
     case STATE_ARMED:
-      // - Si la llave se abre (HIGH), se "desarma" → vuelve a CONEXION
-      // - Si la llave sigue cerrada (LOW) y el botón se pulsa (LOW), lanzamos.
+      // Si la llave se abre (HIGH) => volvemos a CONEXION
       if (estadoLlave == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_READY -> STATE_CONEXION");
+        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_CONEXION (llave abierta)");
         salirEstadoArmed();
         entrarEstadoConexion();
       } 
-      else if (estadoLlave == LOW && estadoSwitch == LOW) {
-        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_LANZADO");
-        //salirEstadoArmed();
+      // Si la llave sigue cerrada (LOW) y el botón se pulsa (LOW) => lanzamos
+      else if ((estadoLlave == LOW) && (estadoSwitch == LOW)) {
+        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_LANZADO (botón pulsado)");
         entrarEstadoLanzado();
       }
       break;
 
     case STATE_LANZADO:
-      // - Si la llave se abre (HIGH), se "desarma" → vuelve a CONEXION
-      // - Si la llave sigue cerrada (LOW) y el botón se despulsa (HIGH), se vuelve a armado.
+      // - Si la llave se abre (HIGH), se "desarma" => vuelve a CONEXION
       if (estadoLlave == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_CONEXION");
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_CONEXION (llave abierta)");
         salirEstadoLanzado();
         salirEstadoArmed();
         entrarEstadoConexion();
-      } 
-      if (estadoSwitch == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_ARMED");
+      }
+      // Si el botón se suelta (HIGH) => volver a ARMED 
+      else if (estadoSwitch == HIGH) {
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_ARMED (botón suelto)");
         salirEstadoLanzado();
         entrarEstadoArmed();
       }
       break;
+      
   }
   
-  delay(100);  // Pequeño retardo para estabilizar las lecturas
+  // 3) Pequeña pausa de estabilidad
+  delay(100);
 }

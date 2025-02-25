@@ -105,8 +105,7 @@ void setupEspNow() {
 
 
 // -------------------------------------------------------------------------
-// Funciones de configuración de periféricos (LED, Relay, etc.)
-// Se pueden activar si se desea utilizar estos elementos
+// Configuración de pines (LEDs, relé, etc.)
 // -------------------------------------------------------------------------
 void setupLeds() {
   pinMode(LED_POWER,  OUTPUT);  digitalWrite(LED_POWER,  HIGH); // invertido: HIGH = off
@@ -161,8 +160,10 @@ enum Estado {
 
 Estado estadoActual = STATE_INICIAL;
 
-/* -- Funciones para entrar/salir de cada estado -- */
 
+// ---------------------
+// Funciones de transición
+// ---------------------
 void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
   Serial.println("Entrando en estado: SIN CONEXIÓN");
