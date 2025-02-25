@@ -19,14 +19,14 @@ uint8_t broadcastAddress[] = {0xe0, 0x5a, 0x1b, 0x5f, 0x8c, 0xd8};
 
 // Estructura para enviar datos (debe coincidir con la del receptor)
 typedef struct struct_message {
-    int ping;
+    int arm;
 } struct_message;
 
 
 
 // Variables globales para envío y recepción
-struct_message pingMessage;
-struct_message receivedPing;
+struct_message sendMessage;
+struct_message receivedMessage;
 // Estructura para la información del peer (dispositivo receptor)
 esp_now_peer_info_t peerInfo;
 
@@ -57,12 +57,12 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 // Callback: Se ejecuta al recibir datos vía ESP-NOW
 // -------------------------------------------------------------------------
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
-  // Copia los datos recibidos en la estructura "receivedPing"
-  memcpy(&receivedPing, incomingData, sizeof(receivedPing));
+  // Copia los datos recibidos en la estructura "receivedMessage"
+  memcpy(&receivedMessage, incomingData, sizeof(receivedMessage));
   
   // Muestra en el monitor serial el valor recibido
   //Serial.print("\r\nPing recibido: ");
-  //Serial.println(receivedPing.ping);
+  //Serial.println(receivedMessage.arm);
 }
 
 
@@ -125,20 +125,19 @@ void setupRelay(){
 
 
 // FUNCIONES DE LOOP
-// -------------------------------------------------------------------------
-// Función: sendPing()
-// Envía un mensaje "ping" vía ESP-NOW y espera el callback de envío.
-// Retorna 1 si el mensaje se entregó exitosamente, y 0 en cualquier otro caso.
-// -------------------------------------------------------------------------
-int sendPing() {
-  // Asigna el valor del ping a enviar
-  pingMessage.ping = 0;
+// ---------------------
+// Función sendArm()
+// Envía un "ping" vía ESP-NOW y retorna 1 si se entregó correctamente
+// ---------------------
+int sendArm() {
+  // Asigna el valor del arm a enviar
+  sendMessage.arm = 0;
   
   // Reinicia la bandera para indicar que aún no se ha recibido el callback
   sendStatusReceived = false;
   
   // Envía el mensaje vía ESP-NOW
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&pingMessage, sizeof(pingMessage));
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&sendMessage, sizeof(sendMessage));
   if (result != ESP_OK) {
     return 0;  // Error al enviar (el mensaje no pudo encolarse)
   }
@@ -199,8 +198,8 @@ void salirEstadoConexion() {
 // Variables para control de temporización (no bloqueante)
 // -------------------------------------------------------------------------
 // Intervalo de envío de ping
-unsigned long previousPingMillis  = 0;
-const long pingInterval           = 1000; 
+unsigned long previousSendMillis  = 0;
+const long sendInterval           = 1000;  
 
 
 
@@ -239,13 +238,13 @@ void loop() {
   unsigned long currentMillis = millis();
   
   // Envío periódico de ping
-  if (currentMillis - previousPingMillis >= pingInterval) {
-    previousPingMillis = currentMillis;
+  if (currentMillis - previousSendMillis >= sendInterval) {
+    previousSendMillis = currentMillis;
     
     // Envio un ping
-    int pingResult = sendPing();
+    int armResult = sendArm();
 
-    if (pingResult == 1) {
+    if (armResult == 1) {
       //Serial.println("Ping entregado exitosamente");
       if (estadoActual == STATE_INICIAL) {
         salirEstadoInicial();
