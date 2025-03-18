@@ -4,12 +4,12 @@
 #include <tinycbor.h>
 
 // Define LoRa pins
-#define RFM95_CS 10  // Chip Select (CS)
-#define RFM95_RST 9  // Reset (RST)
-#define RFM95_INT 2  // Interrupt (G0)
+#define RFM95_CS 10  // Chip Select (CS) for LoRa
+#define RFM95_RST 9  // Reset (RST) for LoRa
+#define RFM95_INT 2  // Interrupt (G0) for LoRa
 
 // Define microSD card pin
-#define SD_CS 4  // Chip Select for microSD card
+#define SD_CS 4  // Chip Select (CS) for microSD card
 
 // Create RFM95 instance
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
@@ -60,11 +60,15 @@ void loop() {
   uint8_t cborBuffer[64]; // Adjust buffer size as needed
   size_t cborSize = encodeCBOR(cborBuffer, sizeof(cborBuffer));
 
-  // Send CBOR data via LoRa
+  // Activate LoRa module and send data
+  activateLoRa();
   sendData(cborBuffer, cborSize);
+  deactivateLoRa();
 
-  // Save CBOR data to microSD card
+  // Activate microSD card and save data
+  activateSD();
   saveToSD(cborBuffer, cborSize);
+  deactivateSD();
 
   delay(5000); // Wait before next cycle
 }
@@ -118,3 +122,26 @@ void saveToSD(const uint8_t* data, size_t dataSize) {
     Serial.println("Error opening file on microSD card");
   }
 }
+
+// Function to activate LoRa module
+void activateLoRa() {
+  digitalWrite(SD_CS, HIGH); // Ensure microSD card is disabled
+  digitalWrite(RFM95_CS, LOW); // Enable LoRa module
+  delay(10); // Small delay to stabilize the bus
+}
+
+// Function to deactivate LoRa module
+void deactivateLoRa() {
+  digitalWrite(RFM95_CS, HIGH); // Disable LoRa module
+  delay(10); // Small delay to stabilize the bus
+}
+
+// Function to activate microSD card
+void activateSD() {
+  digitalWrite(RFM95_CS, HIGH); // Ensure LoRa module is disabled
+  digitalWrite(SD_CS, LOW); // Enable microSD card
+  delay(10); // Small delay to stabilize the bus
+}
+
+// Function to deactivate microSD card
+void deactivateSD()
