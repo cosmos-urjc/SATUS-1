@@ -1,14 +1,18 @@
-#include <LoRa.h>
+#include <SPI.h>
+#include <RH_RF95.h>
 #include <SD.h>
 #include <tinycbor.h>
 
-// Define LoRa pins for SX1276
-#define LORA_SS 10
-#define LORA_RST 9
-#define LORA_DIO0 2
+// Define LoRa pins
+#define RFM95_CS 10  // Chip Select (CS)
+#define RFM95_RST 9  // Reset (RST)
+#define RFM95_INT 2  // Interrupt (G0)
 
-// Define microSD card pins
-#define SD_SS 4 // Chip Select for microSD card
+// Define microSD card pin
+#define SD_CS 4  // Chip Select for microSD card
+
+// Create RFM95 instance
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
 // Simulated sensor data
 float temperature = 25.0;
@@ -19,15 +23,27 @@ void setup() {
   Serial.begin(9600);
   while (!Serial);
 
+  // Manual reset for RFM95
+  pinMode(RFM95_RST, OUTPUT);
+  digitalWrite(RFM95_RST, HIGH);
+  delay(100);
+  digitalWrite(RFM95_RST, LOW);
+  delay(10);
+  digitalWrite(RFM95_RST, HIGH);
+  delay(10);
+
   // Initialize LoRa
-  if (!LoRa.begin(433E6)) { // Use your LoRa frequency
+  if (!rf95.init()) {
     Serial.println("LoRa initialization failed!");
     while (1);
   }
   Serial.println("LoRa initialized successfully!");
 
+  // Set frequency (e.g., 433 MHz)
+  rf95.setFrequency(433.0);
+
   // Initialize microSD card
-  if (!SD.begin(SD_SS)) {
+  if (!SD.begin(SD_CS)) {
     Serial.println("microSD card initialization failed!");
     while (1);
   }
@@ -41,19 +57,19 @@ void loop() {
   batteryVoltage -= 0.01;
 
   // Encode data into CBOR format
-  uint8_t cborBuffer[128]; // Adjust buffer size as needed
+  uint8_t cborBuffer[64]; // Adjust buffer size as needed
   size_t cborSize = encodeCBOR(cborBuffer, sizeof(cborBuffer));
 
-  // Transmit data via LoRa
-  transmitLoRa(cborBuffer, cborSize);
+  // Send CBOR data via LoRa
+  sendData(cborBuffer, cborSize);
 
-  // Save data to microSD card
+  // Save CBOR data to microSD card
   saveToSD(cborBuffer, cborSize);
 
   delay(5000); // Wait before next cycle
 }
 
-// Function to encode data into CBOR format
+// Function to encode telemetry data into CBOR format
 size_t encodeCBOR(uint8_t* buffer, size_t bufferSize) {
   CborEncoder encoder;
   CborEncoder mapEncoder;
@@ -81,30 +97,17 @@ size_t encodeCBOR(uint8_t* buffer, size_t bufferSize) {
   return cbor_encoder_get_buffer_size(&encoder, buffer);
 }
 
-// Function to transmit data via LoRa
-void transmitLoRa(const uint8_t* data, size_t dataSize) {
-  // Ensure LoRa is the only SPI device active
-  digitalWrite(SD_SS, HIGH); // Disable microSD card
-  digitalWrite(LORA_SS, LOW); // Enable LoRa module
-
-  // Send data via LoRa
-  LoRa.beginPacket();
-  LoRa.write(data, dataSize);
-  LoRa.endPacket();
-
+// Function to send CBOR data via LoRa
+void sendData(const uint8_t* data, size_t dataSize) {
+  rf95.send(data, dataSize);
+  rf95.waitPacketSent();
   Serial.println("CBOR data sent via LoRa");
-
-  digitalWrite(LORA_SS, HIGH); // Disable LoRa module
 }
 
-// Function to save data to microSD card
+// Function to save CBOR data to microSD card
 void saveToSD(const uint8_t* data, size_t dataSize) {
-  // Ensure microSD card is the only SPI device active
-  digitalWrite(LORA_SS, HIGH); // Disable LoRa module
-  digitalWrite(SD_SS, LOW); // Enable microSD card
-
   // Open file on microSD card
-  File file = SD.open("telemetry.txt", FILE_WRITE);
+  File file = SD.open("telemetry.dat", FILE_WRITE);
   if (file) {
     // Write CBOR data to file
     file.write(data, dataSize);
@@ -114,6 +117,4 @@ void saveToSD(const uint8_t* data, size_t dataSize) {
   } else {
     Serial.println("Error opening file on microSD card");
   }
-
-  digitalWrite(SD_SS, HIGH); // Disable microSD card
 }
