@@ -273,7 +273,7 @@ void setup() {
   // Entramos en estado inicial
   entrarEstadoInicial();
 
-  xTaskCreate(pingLoop(), "Ping Loop", 1024, NULL, 1, NULL);
+  xTaskCreate(pingLoop, "Ping Loop", 1024, NULL, 1, NULL);
 }
 
 // -------------------------------------------------------------------------

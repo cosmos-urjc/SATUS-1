@@ -19,7 +19,7 @@
 // ------------------------------
 // Inclusión de librerías
 // ------------------------------
-#include <esp_now>
+#include <esp_now.h>
 #include <WiFi.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -266,7 +266,7 @@ void setup() {
   // Configura la comunicación ESP-NOW
   entrarEstadoInicial();
 
-  xTaskCreate(pingLoop(), "Ping Loop", 1024, NULL, 1, NULL);
+  xTaskCreate(pingLoop, "Ping Loop", 1024, NULL, 1, NULL);
 }
 
 // -------------------------------------------------------------------------
