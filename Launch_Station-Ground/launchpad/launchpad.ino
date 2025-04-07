@@ -21,7 +21,8 @@
 // ------------------------------
 #include <esp_now.h>
 #include <WiFi.h>
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // ------------------------------
 // Definiciones de pines y periféricos
@@ -162,7 +163,7 @@ int sendPing() {
 // -------------------------------------------------------------------------
 enum Estado {
   STATE_INICIAL,   // Sin conexión
-  STATE_CONEXION,  // Con conexión
+  //STATE_CONEXION,  // Con conexión
   STATE_ARMED,     // Armado
   STATE_LAUNCHED   // Lanzamiento
 };
@@ -174,9 +175,10 @@ Estado estadoActual = STATE_INICIAL;
 // ---------------------
 void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
-  Serial.println("Entrando en estado: SIN CONEXIÓN");
+  //Serial.println("Entrando en estado: SIN CONEXIÓN");
+  Serial.println("Entrando en STATE_INICIAL.");
   // LED de estado apagado
-  digitalWrite(LED_CONEXION, LOW);
+  //digitalWrite(LED_CONEXION, LOW);
 }
 
 void salirEstadoInicial() {
@@ -184,20 +186,20 @@ void salirEstadoInicial() {
 }
 
 void entrarEstadoConexion() {
-  estadoActual = STATE_CONEXION;
+  //estadoActual = STATE_CONEXION;
   Serial.println("Entrando en STATE_CONEXION (CONECTADO).");
   // LED de estado encendido
   digitalWrite(LED_CONEXION, HIGH);
   // Al entrar a CONEXION, reseteamos cualquier “armado”
-  armado = 0; 
-  lastCommand = 0; 
+  //armado = 0; 
+  //lastCommand = 0; 
 }
 
 void salirEstadoConexion() {
   Serial.println("Saliendo de STATE_CONEXION.");
   // borrar variables
-  armado = 0; 
-  lastCommand = 0; 
+  //armado = 0; 
+  //lastCommand = 0; 
   // LED de estado apagado
   digitalWrite(LED_CONEXION, LOW);
 }
@@ -263,6 +265,34 @@ void setup() {
 
   // Configura la comunicación ESP-NOW
   entrarEstadoInicial();
+
+  xTaskCreate(pingLoop, "Ping Loop", 1024, NULL, 1, NULL);
+}
+
+// -------------------------------------------------------------------------
+// Función: pingLoop()
+// Envía el "ping" periódicamente.
+// -------------------------------------------------------------------------
+void pingLoop(void *pvParameters){
+  while (true) {
+    // pillo el tiempo actual
+    unsigned long currentMillis = millis();
+    
+    // 1) Enviar ping cada “sendInterval” para verificar conexión
+    if (currentMillis - previousSendMillis >= sendInterval) {
+      previousSendMillis = currentMillis;;
+      
+      int resultPing = sendPing(); // 1 = éxito, 0 = fallo
+
+      if (resultPing == 1) {
+        // Si hay éxito en el envío, hay conexión
+        entrarEstadoConexion();
+      } else {
+        salirEstadoConexion();
+      }
+    }
+  }
+  
 }
 
 
@@ -271,54 +301,13 @@ void setup() {
 // Envía el "ping" periódicamente y muestra el resultado en el monitor serial.
 // -------------------------------------------------------------------------
 void loop() {
-  // pillo el tiempo actual
-  unsigned long currentMillis = millis();
-  
-  // 1) Enviar ping cada “sendInterval” para verificar conexión
-  if (currentMillis - previousSendMillis >= sendInterval) {
-    previousSendMillis = currentMillis;;
-    
-    int resultPing = sendPing(); // 1 = éxito, 0 = fallo
-
-    if (resultPing == 1) {
-      // Si hay éxito en el envío, hay conexión
-      if (estadoActual == STATE_INICIAL) {
-        // Pasamos de sin conexión a conexión
-        salirEstadoInicial();
-        entrarEstadoConexion();
-      }
-    }
-    else {
-      // Fallo en el ping => sin conexión
-      // Volver a STATE_INICIAL si estábamos en CONEXION o ARMADO
-      switch(estadoActual) {
-        case STATE_CONEXION:
-          salirEstadoConexion();
-          entrarEstadoInicial();
-          break;
-        case STATE_ARMED:
-          salirEstadoArmed();
-          salirEstadoConexion();
-          entrarEstadoInicial();
-          break;
-        case STATE_LAUNCHED:
-          salirEstadoLaunched();
-          salirEstadoArmed(); 
-          salirEstadoConexion();
-          entrarEstadoInicial();
-          break;
-        default:
-          // me quedo en el estado inicial
-          break;
-      }
-    }
-  }
 
   // 2) Procesar el ultimo comando recibido del ground
   // (0 = "desarmar", 1 = "armar", 2 = "lanzar")
   if (lastCommand == 1) {
     // “armar”
-    if (estadoActual == STATE_CONEXION) {
+    //if (estadoActual == STATE_CONEXION) {
+    if (estadoActual == STATE_INICIAL) {
       entrarEstadoArmed();
     }
     //lastCommand = 0; // consumir el comando
@@ -330,13 +319,15 @@ void loop() {
     if (estadoActual == STATE_ARMED) {
       salirEstadoArmed();
       // vuelvo al modo conexion
-      entrarEstadoConexion();
+      //entrarEstadoConexion();
+      entrarEstadoInicial();
     }
     // Si estás en LAUNCHED => Apagar relé y volver a CONEXION
     if (estadoActual == STATE_LAUNCHED) {
       salirEstadoLaunched();
       salirEstadoArmed();
-      entrarEstadoConexion();
+      //entrarEstadoConexion();
+      entrarEstadoInicial();
     }
   }
 

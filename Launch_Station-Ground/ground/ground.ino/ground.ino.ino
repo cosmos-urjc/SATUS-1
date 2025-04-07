@@ -22,7 +22,8 @@
 // ------------------------------
 #include <esp_now.h>
 #include <WiFi.h>
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // ---------------------
 // Definición de Pines
@@ -176,7 +177,7 @@ int sendArm() {
 // -------------------------------------------------------------------------
 enum Estado {
   STATE_INICIAL,   // Sin conexión
-  STATE_CONEXION,  // Conexión establecida
+  //STATE_CONEXION,  // Conexión establecida
   STATE_ARMED,     // Listo para lanzar (llave y botón supervisados)
   STATE_LANZADO    // Proceso de lanzamiento (relé activo)
 };
@@ -189,7 +190,7 @@ void entrarEstadoInicial() {
   estadoActual = STATE_INICIAL;
   Serial.println("Entrando en STATE_INICIAL (sin conexión).");
   // Apagar LEDs de estados y relé
-  digitalWrite(LED_CONEXION, LOW);
+  //digitalWrite(LED_CONEXION, LOW);
   digitalWrite(LED_ARMED,    LOW);
   digitalWrite(LED_LANZADO,  LOW);
 }
@@ -199,7 +200,7 @@ void salirEstadoInicial() {
 }
 
 void entrarEstadoConexion() {
-  estadoActual = STATE_CONEXION;
+  //estadoActual = STATE_CONEXION;
   Serial.println("Entrando en STATE_CONEXION (conectado).");
   // Enciende LED de conexión
   digitalWrite(LED_CONEXION, HIGH);
@@ -213,7 +214,7 @@ void salirEstadoConexion() {
 // Cuando entramos en STATE_ARMED, enviamos command=1 al Launchpad
 void entrarEstadoArmed() {
   estadoActual = STATE_ARMED;
-  Serial.println("Entrando en STATE_ARMED (listo).");
+  Serial.println("Entr ando en STATE_ARMED (listo).");
   // Enciende LED verde
   digitalWrite(LED_ARMED, HIGH);
   // Avisar al Launchpad que se “arme”
@@ -271,66 +272,43 @@ void setup() {
 
   // Entramos en estado inicial
   entrarEstadoInicial();
+
+  xTaskCreate(pingLoop, "Ping Loop", 1024, NULL, 1, NULL);
 }
 
+// -------------------------------------------------------------------------
+// Función: pingLoop()
+// Envía el "ping" periódicamente.
+// -------------------------------------------------------------------------
+void pingLoop(void *pvParameters){
+  while (true) {
+    unsigned long currentMillis = millis();
 
+    // 1) Enviar ping cada "sendInterval" para verificar conexión
+    if (currentMillis - previousSendMillis >= sendInterval) {
+      previousSendMillis = currentMillis;
 
+      // Resultado de command: 1 = éxito, 0 = fallo
+      int armResult = sendArm();  
+
+      if (armResult == 1) {
+        // Se recibió bien el "ping" --> Hay conexión
+        entrarEstadoConexion();
+      } else {
+        salirEstadoConexion();
+
+      }
+    }
+  }
+  
+}
+
+// volatile bool connected=false;
 // -------------------------------------------------------------------------
 // loop()
 // Envía pings periódicos para verificar conexión y maneja la máquina de estados
 // -------------------------------------------------------------------------
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // 1) Enviar ping cada "sendInterval" para verificar conexión
-  if (currentMillis - previousSendMillis >= sendInterval) {
-    previousSendMillis = currentMillis;
-
-    // Resultado de command: 1 = éxito, 0 = fallo
-    int armResult = sendArm();  
-
-    if (armResult == 1) {
-      // Se recibió bien el "ping" --> Hay conexión
-      if (estadoActual == STATE_INICIAL) {
-        // Pasar de "sin conexión" a "con conexión"
-        Serial.println("TRANSICIÓN: STATE_INICIAL -> STATE_CONEXION (conexión detectada)");
-        salirEstadoInicial();
-        entrarEstadoConexion();
-      }
-      // Si ya estás en CONEXION, ARMED o LANZADO, no cambias nada por ahora
-    }
-
-    else {
-      // Fallo en la entrega --> No hay conexión
-      switch (estadoActual) {
-        case STATE_CONEXION:
-          // De "conectado" volvemos a "inicial" (sin conexión)
-          Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_INICIAL (pérdida de conexión)");
-          salirEstadoConexion();
-          entrarEstadoInicial();
-          break;
-
-        case STATE_ARMED:
-          // Si está ARMADO y perdemos conexión, desarmar
-          Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_INICIAL (pérdida de conexión)");
-          salirEstadoArmed();
-          entrarEstadoInicial();
-          break;
-          
-        case STATE_LANZADO:
-          // Si está LANZADO y perdemos conexión, desarmar
-          Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_INICIAL (pérdida de conexión)");
-          salirEstadoLanzado();
-          entrarEstadoInicial();
-          break;
-
-        default:
-          // Si ya está en inicial, no hay transicion
-          break;
-
-      }
-    }
-  }
 
   // 2) Lógica de la máquina de estados con llave y botón
   int estadoLlave = digitalRead(PIN_LLAVE);     // HIGH = abierta (off), LOW = cerrada (on)
@@ -340,22 +318,30 @@ void loop() {
   
     case STATE_INICIAL:
       // Esperamos a que se establezca la conexión (ping)
-      break;
-
-    case STATE_CONEXION:
       // Para armar: llave cerrada (LOW), botón suelto (HIGH)
       if ((estadoLlave == LOW) && (estadoSwitch == HIGH)) {
-        Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_ARMED (llave cerrada, botón suelto)");
+        Serial.println("TRANSICIÓN: STATE_INICIAL -> STATE_ARMED (llave cerrada, botón suelto)");
+        salirEstadoInicial();
         entrarEstadoArmed();
       }
       break;
 
+    //case STATE_CONEXION:
+      // Para armar: llave cerrada (LOW), botón suelto (HIGH)
+      // if ((estadoLlave == LOW) && (estadoSwitch == HIGH)) {
+      //   Serial.println("TRANSICIÓN: STATE_CONEXION -> STATE_ARMED (llave cerrada, botón suelto)");
+      //   entrarEstadoArmed();
+      // }
+      //break;
+
     case STATE_ARMED:
       // Si la llave se abre (HIGH) => volvemos a CONEXION
       if (estadoLlave == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_CONEXION (llave abierta)");
+        //Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_CONEXION (llave abierta)");
+        Serial.println("TRANSICIÓN: STATE_ARMED -> STATE_INICIAL (llave abierta)");
         salirEstadoArmed();
-        entrarEstadoConexion();
+        //entrarEstadoConexion();
+        entrarEstadoInicial()
       } 
       // Si la llave sigue cerrada (LOW) y el botón se pulsa (LOW) => lanzamos
       else if ((estadoLlave == LOW) && (estadoSwitch == LOW)) {
@@ -367,10 +353,12 @@ void loop() {
     case STATE_LANZADO:
       // - Si la llave se abre (HIGH), se "desarma" => vuelve a CONEXION
       if (estadoLlave == HIGH) {
-        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_CONEXION (llave abierta)");
+        //Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_CONEXION (llave abierta)");
+        Serial.println("TRANSICIÓN: STATE_LANZADO -> STATE_INICIAL (llave abierta)");
         salirEstadoLanzado();
         salirEstadoArmed();
-        entrarEstadoConexion();
+        //entrarEstadoConexion();
+        entrarEstadoInicial();
       }
       // Si el botón se suelta (HIGH) => volver a ARMED 
       else if (estadoSwitch == HIGH) {
